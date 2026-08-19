@@ -122,8 +122,10 @@ def _required(store: SQLiteStore, task_id: str) -> WorkflowState:
     return state
 
 
-app = create_app()
-
-
 def run() -> None:
-    uvicorn.run("agent_resilience.api:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run(
+        "agent_resilience.api:create_app",
+        factory=True,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+    )
