@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.venv
+__pycache__
+*.pyc
+*.iml
+.env*
+data
+evals/results
+out
+test
+tests

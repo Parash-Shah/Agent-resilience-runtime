@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-resilience-runtime"
+version = "0.2.0"
+description = "A fault-tolerant runtime for reliable autonomous AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "openai-agents>=0.8,<1",
+  "prometheus-client>=0.22,<1",
+  "pydantic-settings>=2.10,<3",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pillow>=11.3,<13",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+]
+observability = [
+  "opentelemetry-exporter-otlp-proto-http>=1.36,<2",
+  "opentelemetry-instrumentation-fastapi>=0.57b0,<1",
+  "opentelemetry-sdk>=1.36,<2",
+]
+
+[project.scripts]
+agent-resilience-api = "agent_resilience.api:run"
+agent-resilience-worker = "agent_resilience.worker:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_resilience"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

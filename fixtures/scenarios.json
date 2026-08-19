@@ -1,0 +1,24 @@
+{
+  "checkout-pool-exhaustion": {
+    "service": "checkout-service",
+    "environment": "production",
+    "alert": {"error_rate_percent": 14.2, "summary": "Elevated checkout errors"},
+    "metrics": {"p95_latency_ms": 1840, "db_pool_waiters": 47, "active_connections": 50, "max_connections": 50},
+    "logs": {"error": "SQLTransientConnectionException: connection acquisition timeout", "count": 318},
+    "dependencies": {"database": "healthy", "payment_gateway": "healthy", "inventory": "healthy"},
+    "root_cause": "database connection pool exhaustion",
+    "after_restart": {"error_rate_percent": 0.3, "p95_latency_ms": 210},
+    "transient_failures": {"inspect_metrics": 1}
+  },
+  "payment-dependency-outage": {
+    "service": "checkout-service",
+    "environment": "production",
+    "alert": {"error_rate_percent": 22.8, "summary": "Payment authorization failures"},
+    "metrics": {"p95_latency_ms": 960, "db_pool_waiters": 0, "active_connections": 12, "max_connections": 50},
+    "logs": {"error": "payment-gateway upstream returned 503", "count": 521},
+    "dependencies": {"database": "healthy", "payment_gateway": "unavailable", "inventory": "healthy"},
+    "root_cause": "payment gateway outage",
+    "after_restart": {"error_rate_percent": 22.4, "p95_latency_ms": 940},
+    "transient_failures": {}
+  }
+}

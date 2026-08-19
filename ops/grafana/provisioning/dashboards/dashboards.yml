@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: AgentResilience
+    folder: AgentResilience
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
