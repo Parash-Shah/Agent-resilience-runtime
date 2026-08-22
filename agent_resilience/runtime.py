@@ -5,16 +5,16 @@ import json
 import time
 
 from .decision import DecisionEngine
+from .contracts import RuntimeStore
 from .errors import PermanentWorkflowError, RetryableWorkflowError
 from .loop_detector import LoopDetector
-from .metrics import DECISION_LATENCY, MODEL_CALLS, TOOL_CALLS, WORKFLOW_FAILURES, WORKFLOWS_COMPLETED
+from .metrics import DECISION_LATENCY, MODEL_CALLS, TOOL_CALLS, WORKFLOW_FAILURES, WORKFLOWS_COMPLETED, emit_metric
 from .models import PendingAction, WorkflowState, WorkflowStatus
-from .store import SQLiteStore
 from .tools import ToolGateway
 
 
 class WorkflowRuntime:
-    def __init__(self, store: SQLiteStore, engine: DecisionEngine, gateway: ToolGateway, loop_detector: LoopDetector | None = None):
+    def __init__(self, store: RuntimeStore, engine: DecisionEngine, gateway: ToolGateway, loop_detector: LoopDetector | None = None):
         self.store = store
         self.engine = engine
         self.gateway = gateway
@@ -36,11 +36,22 @@ class WorkflowRuntime:
         try:
             decision = await self.engine.decide(state)
             MODEL_CALLS.labels("success").inc()
+        except RetryableWorkflowError as error:
+            MODEL_CALLS.labels("failure").inc()
+            state.retries += 1
+            state.status = WorkflowStatus.QUEUED
+            state.last_error = str(error)
+            state = self.store.save_workflow(state, state.version)
+            self.store.record_event(task_id, "MODEL_RETRYABLE_FAILURE", {"error": str(error)})
+            emit_metric("ModelFailures", outcome="retryable")
+            raise
         except Exception:
             MODEL_CALLS.labels("failure").inc()
             raise
         finally:
-            DECISION_LATENCY.observe(time.monotonic() - started)
+            elapsed = time.monotonic() - started
+            DECISION_LATENCY.observe(elapsed)
+            emit_metric("DecisionLatency", elapsed)
 
         state.model_calls += 1
         self.store.record_event(task_id, "AGENT_DECISION", decision.model_dump(mode="json"))
@@ -56,6 +67,7 @@ class WorkflowRuntime:
             state = self.store.save_workflow(state, state.version)
             self.store.record_event(task_id, "WORKFLOW_COMPLETED", {"answer": state.final_answer})
             WORKFLOWS_COMPLETED.inc()
+            emit_metric("WorkflowsCompleted")
             return state
         if decision.action == "fail":
             return self._fail(state, decision.rationale, "agent_decision")
@@ -72,6 +84,7 @@ class WorkflowRuntime:
             state = self.store.save_workflow(state, state.version)
             self.store.record_event(task_id, "LOOP_DETECTED", {"reason": loop_reason, "history": state.tool_history[-12:]})
             WORKFLOW_FAILURES.labels("loop").inc()
+            emit_metric("LoopDetections")
             return state
         state = self.store.save_workflow(state, state.version)
 
@@ -105,8 +118,10 @@ class WorkflowRuntime:
         try:
             result, cached = self.gateway.execute(state, tool, arguments)
             TOOL_CALLS.labels(tool.value, "cached" if cached else "success").inc()
+            emit_metric("ToolCalls", tool=tool.value, outcome="cached" if cached else "success")
         except RetryableWorkflowError as error:
             TOOL_CALLS.labels(tool.value, "retryable_failure").inc()
+            emit_metric("ToolFailures", tool=tool.value, outcome="retryable")
             state.retries += 1
             state.last_error = str(error)
             state.status = WorkflowStatus.QUEUED
@@ -115,6 +130,7 @@ class WorkflowRuntime:
             raise
         except PermanentWorkflowError as error:
             TOOL_CALLS.labels(tool.value, "permanent_failure").inc()
+            emit_metric("ToolFailures", tool=tool.value, outcome="permanent")
             return self._fail(state, str(error), "tool")
 
         state.tool_calls += 1
@@ -140,6 +156,7 @@ class WorkflowRuntime:
         state = self.store.save_workflow(state, state.version)
         self.store.record_event(state.task_id, "WORKFLOW_FAILED", {"category": category, "reason": reason})
         WORKFLOW_FAILURES.labels(category).inc()
+        emit_metric("WorkflowFailures", category=category)
         return state
 
     def _required_state(self, task_id: str) -> WorkflowState:

@@ -109,7 +109,7 @@ class ApprovalRequest(BaseModel):
 
 
 class EventRecord(BaseModel):
-    id: int
+    id: int | str
     task_id: str
     event_type: str
     payload: dict[str, Any]
@@ -117,8 +117,9 @@ class EventRecord(BaseModel):
 
 
 class QueueDelivery(BaseModel):
-    id: int
+    id: int | str
     task_id: str
     attempts: int
     max_attempts: int
     payload: dict[str, Any]
+    receipt_handle: str | None = None

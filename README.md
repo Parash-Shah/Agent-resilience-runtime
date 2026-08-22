@@ -8,18 +8,19 @@ AgentResilience investigates production incidents with an OpenAI Agents SDK orch
 
 ## What is implemented
 
-- **Resumable execution:** every agent decision and tool result is checkpointed in SQLite with optimistic version checks. Each queue delivery performs one bounded action, so a replacement worker resumes at the next incomplete action.
-- **Durable queue:** atomic claims, worker leases, expired-lease recovery, exponential retries, and dead-lettering after a bounded attempt count.
+- **Resumable execution:** every agent decision and tool result is checkpointed in DynamoDB (AWS) or SQLite (local) with optimistic version checks. Each queue delivery performs one bounded action, so a replacement worker resumes at the next incomplete action.
+- **Durable queue:** SQS receipt handles, continuously extended visibility leases, exponential retries, explicit DLQ transfer, and a compatible local queue.
 - **Idempotent tools:** stable action IDs and persisted results prevent duplicate infrastructure calls after crashes or redelivery.
 - **Agentic orchestration:** a typed Agents SDK orchestrator chooses the next action and can consult log-analysis, cloud-state, and remediation specialist agents.
 - **Safety:** Pydantic argument validation, explicit risk policy, blocked operations, authenticated approval/rejection endpoints, and no infrastructure credentials in the model context.
 - **Human approval:** production restart requests pause durably and continue only after an authorized approval. Rejection is a terminal, audited outcome.
 - **Loop protection:** repeated tool cycles and repeated no-progress state fingerprints stop the workflow.
-- **Observability:** append-only audit events, OpenAI agent traces, Prometheus metrics, an optional OpenTelemetry exporter, and a provisioned Grafana dashboard.
-- **Evaluation:** an offline incident suite scores task outcome, diagnosis, evidence, unsafe attempts, tool calls, retries, and P95 latency without API cost. A `--live` mode evaluates the actual model path.
-- **Deployment assets:** a non-root container, separate API and worker services, Prometheus/Grafana Compose stack, GitHub Actions CI, and Terraform for encrypted SQS/DLQ, DynamoDB, and CloudWatch primitives.
+- **Real AWS tools:** read-only CloudWatch alarms, metrics and logs; ECS service health; and one approval-gated ECS `forceNewDeployment` remediation.
+- **Observability:** append-only DynamoDB audit events, OpenAI agent traces, Prometheus/Grafana locally, optional OpenTelemetry, and a deployed CloudWatch dashboard with workflow, retry, latency, tool-failure, loop, SQS/DLQ, and ECS panels.
+- **Evaluation:** 50 incident cases score task outcome, diagnosis, recovery after injected failures, evidence, safety, tool calls, retries, and P95 latency. `--live` evaluates the Agents SDK path.
+- **Deployment:** separate Fargate API/worker services, an ALB, ECR, Secrets Manager injection, encrypted SQS/DLQ, DynamoDB, least-privilege task roles, alarms, and CI validation through Terraform.
 
-The runnable persistence adapter is SQLite for a self-contained demonstration. The Terraform module provisions the AWS reliability primitives; connecting them requires an AWS store/queue adapter at the existing `SQLiteStore` boundary.
+Select adapters with `RUNTIME_BACKEND=sqlite|aws` and `TOOL_BACKEND=scenario|aws`. Local development remains self-contained; AWS deployment uses the production adapters without changing workflow logic.
 
 ## Failure coverage
 
@@ -81,10 +82,47 @@ To demonstrate crash recovery, stop the worker after any `TOOL_COMPLETED` event 
 ```powershell
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe evals/run_local.py
-.venv\Scripts\python.exe evals/run_local.py --live
+.venv\Scripts\python.exe evals/run_local.py --live --limit 3
 ```
 
-Evaluation output is written to `evals/results/latest.json` and intentionally ignored by Git so published numbers must come from a real run.
+Offline and live reports are written separately to `evals/results/latest.json` and `latest-live.json`. Results are ignored by Git so published numbers must come from an actual run.
+
+## LocalStack integration and chaos tests
+
+```powershell
+docker compose -f docker-compose.localstack.yml up -d --wait
+$env:AWS_ACCESS_KEY_ID = "test"
+$env:AWS_SECRET_ACCESS_KEY = "test"
+$env:AWS_DEFAULT_REGION = "us-east-1"
+$env:RUN_LOCALSTACK_TESTS = "1"
+$env:LOCALSTACK_ENDPOINT = "http://localhost:4566"
+.venv\Scripts\python.exe -m pytest -q -m integration
+```
+
+The chaos test completes alert, metrics, and log collection, abandons the next SQS delivery as if the worker died, waits for visibility expiry, then proves a replacement worker resumes at dependency health with exactly four completed tools.
+
+## AWS deployment
+
+The Terraform module creates the complete runtime but defaults both ECS desired counts to zero so secrets and the container image can be populated safely before tasks start:
+
+```powershell
+Copy-Item infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
+terraform -chdir=infra/terraform init
+terraform -chdir=infra/terraform apply
+
+# Build and push an immutable image tag to the ecr_repository_url output.
+# Then publish ignored local credentials without displaying them:
+.venv\Scripts\python.exe scripts/publish_aws_secrets.py `
+  --openai-secret-id <openai_secret_arn> `
+  --admin-secret-id <admin_secret_arn> `
+  --region us-east-1
+
+terraform -chdir=infra/terraform apply `
+  -var="container_image=<account>.dkr.ecr.us-east-1.amazonaws.com/agent-resilience-dev:<git-sha>" `
+  -var="api_desired_count=2" -var="worker_desired_count=2"
+```
+
+Use private task subnets, NAT or VPC endpoints, HTTPS on the ALB, and a restricted `api_ingress_cidrs` value for a production deployment. See [infra/terraform/README.md](infra/terraform/README.md) for the full bootstrap and verification flow.
 
 ## Containers and monitoring
 
@@ -102,9 +140,9 @@ docker compose up --build
 ## Repository map
 
 ```text
-agent_resilience/   API, agent orchestration, runtime, store, tools, safety
-tests/              recovery, queue, policy, loop, and API tests
-evals/              repeatable incident evaluation suite
+agent_resilience/   API, agent orchestration, local/AWS stores, AWS tools, safety
+tests/              local tests plus LocalStack integration and chaos tests
+evals/              generated 50-case evaluation suite
 fixtures/           deterministic incident/tool responses
 ops/                Prometheus and Grafana configuration
 infra/terraform/    AWS durable messaging, state, and monitoring primitives
@@ -116,7 +154,7 @@ src/, test/         original Java proof of concept retained for history
 
 - Never commit `.env` or `.env.local`.
 - Set a strong `ADMIN_API_TOKEN` in any shared environment.
-- Replace the fixture backend with narrowly scoped service identities; never expose AWS credentials to agent prompts.
+- Restrict `operations_service_arns` and `operations_log_group_arns` to the exact resources the agent is allowed to touch; never expose AWS credentials to prompts.
 - Terminate TLS and add your organization identity layer in front of the API before production use.
 
 ## OpenAI implementation references

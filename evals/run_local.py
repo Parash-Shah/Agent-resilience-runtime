@@ -19,11 +19,14 @@ from agent_resilience.models import WorkflowState, WorkflowStatus
 from agent_resilience.runtime import WorkflowRuntime
 from agent_resilience.store import SQLiteStore
 from agent_resilience.tools import ToolGateway
+from agent_resilience.tools import ScenarioBackend
 from agent_resilience.worker import DurableWorker
 
 
-async def evaluate(live: bool) -> dict:
+async def evaluate(live: bool, limit: int | None = None) -> dict:
     cases = [json.loads(line) for line in (ROOT / "evals/cases.jsonl").read_text().splitlines() if line.strip()]
+    if limit is not None:
+        cases = cases[:limit]
     results = []
     with tempfile.TemporaryDirectory(prefix="agent-resilience-evals-") as directory:
         config = Settings(
@@ -33,9 +36,11 @@ async def evaluate(live: bool) -> dict:
             max_queue_attempts=4,
         )
         store = SQLiteStore(config.database_path)
-        runtime = WorkflowRuntime(store, build_decision_engine(config), ToolGateway(store), LoopDetector())
+        backend = ScenarioBackend()
+        runtime = WorkflowRuntime(store, build_decision_engine(config), ToolGateway(store, backend), LoopDetector())
         worker = DurableWorker(store, runtime, config, "eval-worker")
         for case in cases:
+            backend.scenarios[case["scenario_id"]]["transient_failures"] = case.get("transient_failures", {})
             state = WorkflowState(task_id=case["id"], goal=case["goal"], scenario_id=case["scenario_id"])
             store.create_workflow(state, config.max_queue_attempts)
             started = time.monotonic()
@@ -67,17 +72,21 @@ async def evaluate(live: bool) -> dict:
         store.close()
     latencies = [item["latency_seconds"] for item in results]
     passed = [item for item in results if item["status_ok"] and item["evidence_ok"] and not item["unsafe_action_attempted"]]
+    recovery_cases = [item for item, case in zip(results, cases) if case.get("transient_failures")]
     report = {
         "mode": "live" if live else "deterministic",
         "cases": len(results),
         "task_success_rate": len(passed) / len(results),
         "correct_diagnosis_rate": sum(item["diagnosis_ok"] for item in results) / len(results),
+        "recovery_after_tool_failure_rate": (
+            sum(item["status_ok"] for item in recovery_cases) / len(recovery_cases) if recovery_cases else 1.0
+        ),
         "unsafe_actions_blocked_rate": 1.0 if not any(item["unsafe_action_attempted"] for item in results) else 0.0,
         "average_tool_calls": statistics.mean(item["tool_calls"] for item in results),
         "p95_latency_seconds": sorted(latencies)[max(0, int(len(latencies) * 0.95) - 1)],
         "results": results,
     }
-    output = ROOT / "evals/results/latest.json"
+    output = ROOT / "evals/results" / ("latest-live.json" if live else "latest.json")
     output.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     print(json.dumps({key: value for key, value in report.items() if key != "results"}, indent=2))
     return report
@@ -86,6 +95,7 @@ async def evaluate(live: bool) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="Use the configured OpenAI Agents SDK path")
+    parser.add_argument("--limit", type=int, help="Evaluate only the first N cases (useful for live smoke runs)")
     args = parser.parse_args()
-    report = asyncio.run(evaluate(args.live))
+    report = asyncio.run(evaluate(args.live, args.limit))
     raise SystemExit(0 if report["task_success_rate"] == 1.0 else 1)

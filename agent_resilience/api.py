@@ -13,20 +13,24 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from .config import Settings, settings
 from .decision import DecisionEngine, build_decision_engine
+from .contracts import RuntimeStore
+from .factory import build_store, build_tool_backend
 from .loop_detector import LoopDetector
-from .metrics import APPROVALS, WORKFLOWS_CREATED
+from .metrics import APPROVALS, WORKFLOWS_CREATED, configure_cloudwatch_metrics, emit_metric
 from .models import ApprovalRequest, CreateIncidentRequest, WorkflowState, WorkflowStatus
 from .observability import configure_otel
 from .runtime import WorkflowRuntime
-from .store import SQLiteStore
 from .tools import ToolGateway
 from .worker import DurableWorker
 
 
 def create_app(config: Settings = settings, engine: DecisionEngine | None = None) -> FastAPI:
-    store = SQLiteStore(config.database_path)
-    runtime = WorkflowRuntime(store, engine or build_decision_engine(config), ToolGateway(store), LoopDetector())
+    store = build_store(config)
+    runtime = WorkflowRuntime(
+        store, engine or build_decision_engine(config), ToolGateway(store, build_tool_backend(config)), LoopDetector()
+    )
     worker = DurableWorker(store, runtime, config)
+    configure_cloudwatch_metrics(config)
     worker_task: asyncio.Task | None = None
 
     @asynccontextmanager
@@ -41,7 +45,7 @@ def create_app(config: Settings = settings, engine: DecisionEngine | None = None
 
     app = FastAPI(
         title="AgentResilience",
-        version="0.2.0",
+        version="0.3.0",
         description="Durable, policy-bound execution for autonomous incident response agents.",
         lifespan=lifespan,
     )
@@ -70,6 +74,7 @@ def create_app(config: Settings = settings, engine: DecisionEngine | None = None
         state = WorkflowState(task_id=task_id, goal=request.goal, scenario_id=request.scenario_id)
         store.create_workflow(state, config.max_queue_attempts)
         WORKFLOWS_CREATED.inc()
+        emit_metric("WorkflowsCreated")
         return state
 
     @app.get("/v1/incidents/{task_id}", response_model=WorkflowState)
@@ -92,6 +97,7 @@ def create_app(config: Settings = settings, engine: DecisionEngine | None = None
         store.record_event(task_id, "APPROVAL_GRANTED", {"actor": request.actor, "reason": request.reason})
         store.enqueue(task_id, config.max_queue_attempts)
         APPROVALS.labels("approved").inc()
+        emit_metric("Approvals", decision="approved")
         return state
 
     @app.post("/v1/incidents/{task_id}/reject", response_model=WorkflowState, dependencies=[Depends(require_admin)])
@@ -106,6 +112,7 @@ def create_app(config: Settings = settings, engine: DecisionEngine | None = None
         state = store.save_workflow(state, state.version)
         store.record_event(task_id, "APPROVAL_REJECTED", {"actor": request.actor, "reason": request.reason})
         APPROVALS.labels("rejected").inc()
+        emit_metric("Approvals", decision="rejected")
         return state
 
     @app.post("/internal/worker/run-once", dependencies=[Depends(require_admin)])
@@ -115,7 +122,7 @@ def create_app(config: Settings = settings, engine: DecisionEngine | None = None
     return app
 
 
-def _required(store: SQLiteStore, task_id: str) -> WorkflowState:
+def _required(store: RuntimeStore, task_id: str) -> WorkflowState:
     state = store.get_workflow(task_id)
     if state is None:
         raise HTTPException(status_code=404, detail="workflow not found")

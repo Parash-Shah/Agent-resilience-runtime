@@ -1,0 +1,13 @@
+services:
+  localstack:
+    image: localstack/localstack:4.7.0
+    environment:
+      SERVICES: dynamodb,sqs,cloudwatch,logs,secretsmanager
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20

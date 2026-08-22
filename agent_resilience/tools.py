@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
 from .errors import PermanentWorkflowError, RetryableWorkflowError
 from .models import ToolName, WorkflowState
 from .policy import PermissionPolicy, PolicyDecision
-from .store import SQLiteStore
+from .contracts import RuntimeStore
 
 
 class ServiceArguments(BaseModel):
@@ -32,6 +32,10 @@ ARGUMENT_MODELS: dict[ToolName, type[BaseModel]] = {
 }
 
 
+class ToolBackend(Protocol):
+    def execute(self, state: WorkflowState, tool: ToolName, arguments: dict[str, Any], attempt: int) -> dict[str, Any]: ...
+
+
 class ScenarioBackend:
     """Deterministic adapter used locally; real adapters implement the same execute contract."""
 
@@ -43,7 +47,7 @@ class ScenarioBackend:
         if not scenario:
             raise PermanentWorkflowError(f"unknown scenario: {state.scenario_id}")
         transient_count = int(scenario.get("transient_failures", {}).get(tool.value, 0))
-        if attempt <= transient_count:
+        if 0 < attempt <= transient_count:
             raise RetryableWorkflowError(f"{tool.value} downstream timed out")
         if tool == ToolName.READ_ALERT:
             return scenario["alert"]
@@ -64,7 +68,7 @@ class ScenarioBackend:
 
 
 class ToolGateway:
-    def __init__(self, store: SQLiteStore, backend: ScenarioBackend | None = None, policy: PermissionPolicy | None = None):
+    def __init__(self, store: RuntimeStore, backend: ToolBackend | None = None, policy: PermissionPolicy | None = None):
         self.store = store
         self.backend = backend or ScenarioBackend()
         self.policy = policy or PermissionPolicy()

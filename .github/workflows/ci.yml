@@ -11,13 +11,42 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      localstack:
+        image: localstack/localstack:4.7.0
+        env:
+          SERVICES: dynamodb,sqs,cloudwatch,logs,secretsmanager
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -f http://localhost:4566/_localstack/health"
+          --health-interval 3s
+          --health-timeout 2s
+          --health-retries 20
+    env:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.5"
       - run: pip install -e ".[dev]"
       - run: pytest -q
+      - run: pytest -q -m integration
+        env:
+          RUN_LOCALSTACK_TESTS: "1"
+          LOCALSTACK_ENDPOINT: http://localhost:4566
       - run: python evals/run_local.py
+      - run: terraform fmt -check -recursive
+        working-directory: infra/terraform
+      - run: terraform init -backend=false
+        working-directory: infra/terraform
+      - run: terraform validate
+        working-directory: infra/terraform
       - run: docker build -t agent-resilience-runtime:ci .

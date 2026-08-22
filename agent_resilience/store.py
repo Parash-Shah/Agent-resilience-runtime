@@ -192,6 +192,13 @@ class SQLiteStore:
             (now, delivery_id),
         )
 
+    def extend_lease(self, delivery: QueueDelivery, lease_seconds: int) -> None:
+        lease_until = (utc_now() + timedelta(seconds=lease_seconds)).isoformat()
+        self._connection().execute(
+            "UPDATE queue SET lease_until=?,updated_at=? WHERE id=? AND status='PROCESSING'",
+            (lease_until, utc_now().isoformat(), delivery.id),
+        )
+
     def retry_or_dead_letter(self, delivery: QueueDelivery, error: str, base_delay_seconds: float = 1.0) -> bool:
         now = utc_now()
         dead = delivery.attempts >= delivery.max_attempts

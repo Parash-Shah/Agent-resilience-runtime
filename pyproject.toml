@@ -4,11 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-resilience-runtime"
-version = "0.2.0"
+version = "0.3.0"
 description = "A fault-tolerant runtime for reliable autonomous AI agents"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "boto3>=1.40,<2",
   "fastapi>=0.116,<1",
   "openai-agents>=0.8,<1",
   "prometheus-client>=0.22,<1",
@@ -18,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "botocore>=1.40,<2",
   "httpx>=0.28,<1",
   "pillow>=11.3,<13",
   "pytest>=8.4,<9",
@@ -39,3 +41,7 @@ packages = ["agent_resilience"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+  "integration: tests that require LocalStack",
+  "live: tests that make paid external API calls",
+]

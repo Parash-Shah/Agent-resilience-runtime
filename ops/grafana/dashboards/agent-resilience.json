@@ -4,10 +4,10 @@
   "schemaVersion": 41,
   "refresh": "5s",
   "panels": [
-    {"type":"stat","title":"Completed workflows","id":1,"gridPos":{"h":8,"w":6,"x":0,"y":0},"targets":[{"expr":"agent_resilience_workflows_completed_total"}]},
-    {"type":"stat","title":"Failures","id":2,"gridPos":{"h":8,"w":6,"x":6,"y":0},"targets":[{"expr":"sum(agent_resilience_workflow_failures_total)"}]},
-    {"type":"timeseries","title":"Decision latency","id":3,"gridPos":{"h":8,"w":12,"x":12,"y":0},"targets":[{"expr":"rate(agent_resilience_decision_latency_seconds_sum[5m]) / rate(agent_resilience_decision_latency_seconds_count[5m])"}]},
-    {"type":"timeseries","title":"Tool calls by outcome","id":4,"gridPos":{"h":9,"w":12,"x":0,"y":8},"targets":[{"expr":"sum by (tool, outcome) (rate(agent_resilience_tool_calls_total[5m]))"}]},
-    {"type":"timeseries","title":"Queue depth","id":5,"gridPos":{"h":9,"w":12,"x":12,"y":8},"targets":[{"expr":"agent_resilience_queue_depth"}]}
+    {"type":"stat","title":"Completed workflows","id":1,"gridPos":{"h":8,"w":6,"x":0,"y":0},"targets":[{"expr":"agent_workflows_completed_total"}]},
+    {"type":"stat","title":"Failures","id":2,"gridPos":{"h":8,"w":6,"x":6,"y":0},"targets":[{"expr":"sum(agent_workflow_failures_total)"}]},
+    {"type":"timeseries","title":"Decision latency","id":3,"gridPos":{"h":8,"w":12,"x":12,"y":0},"targets":[{"expr":"rate(agent_decision_latency_seconds_sum[5m]) / rate(agent_decision_latency_seconds_count[5m])"}]},
+    {"type":"timeseries","title":"Tool calls by outcome","id":4,"gridPos":{"h":9,"w":12,"x":0,"y":8},"targets":[{"expr":"sum by (tool, outcome) (rate(agent_tool_calls_total[5m]))"}]},
+    {"type":"timeseries","title":"Queue depth","id":5,"gridPos":{"h":9,"w":12,"x":12,"y":8},"targets":[{"expr":"agent_queue_depth"}]}
   ]
 }

@@ -30,10 +30,16 @@ resource "aws_sqs_queue" "tasks" {
 resource "aws_dynamodb_table" "workflows" {
   name         = "${local.prefix}-workflows"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "task_id"
+  hash_key     = "pk"
+  range_key    = "sk"
 
   attribute {
-    name = "task_id"
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
     type = "S"
   }
 

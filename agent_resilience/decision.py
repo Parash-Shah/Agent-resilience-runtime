@@ -47,7 +47,10 @@ class DeterministicDecisionEngine(DecisionEngine):
             )
         if "verify_recovery" not in state.evidence:
             return AgentDecision(action="use_tool", tool=ToolName.VERIFY_RECOVERY, arguments=defaults, rationale="verify recovery")
-        recovered = float(state.evidence["verify_recovery"].get("error_rate_percent", 100)) < 1.0
+        verification = state.evidence["verify_recovery"]
+        metrics = verification.get("metrics", verification)
+        rate = metrics.get("error_rate_percent")
+        recovered = rate is not None and float(rate) < 1.0
         if recovered:
             return AgentDecision(
                 action="complete", rationale="recovery evidence meets threshold",
@@ -65,9 +68,11 @@ class OpenAIDecisionEngine(DecisionEngine):
     def __init__(self, config: Settings):
         if not config.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required for live agent mode")
-        from agents import Agent
+        from agents import Agent, set_default_openai_key, set_tracing_export_api_key
 
         self.config = config
+        set_default_openai_key(config.openai_api_key)
+        set_tracing_export_api_key(config.openai_api_key)
         log_specialist = Agent(
             name="Log analysis specialist", model=config.openai_model,
             instructions="Analyze supplied application-log evidence. Identify concrete error signatures and avoid speculation.",
