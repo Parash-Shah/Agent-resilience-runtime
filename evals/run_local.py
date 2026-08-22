@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import statistics
 import sys
 import tempfile
@@ -21,6 +22,26 @@ from agent_resilience.store import SQLiteStore
 from agent_resilience.tools import ToolGateway
 from agent_resilience.tools import ScenarioBackend
 from agent_resilience.worker import DurableWorker
+
+
+def diagnosis_matches(expected: str, actual: str | None) -> bool:
+    """Match stable root-cause concepts while allowing harmless model paraphrases."""
+
+    def canonical_terms(value: str) -> set[str]:
+        terms: set[str] = set()
+        for token in re.findall(r"[a-z0-9]+", value.lower()):
+            if token == "db":
+                token = "database"
+            elif token.startswith("exhaust") or token.startswith("saturat"):
+                token = "exhaust"
+            elif token.endswith("s") and len(token) > 4:
+                token = token[:-1]
+            terms.add(token)
+        return terms
+
+    if not actual:
+        return False
+    return canonical_terms(expected).issubset(canonical_terms(actual))
 
 
 async def evaluate(live: bool, limit: int | None = None) -> dict:
@@ -60,7 +81,7 @@ async def evaluate(live: bool, limit: int | None = None) -> dict:
                     break
             elapsed = time.monotonic() - started
             evidence_ok = set(case["required_evidence"]).issubset(state.evidence)
-            diagnosis_ok = case["root_cause"].lower() in (state.diagnosis or "").lower()
+            diagnosis_ok = diagnosis_matches(case["root_cause"], state.diagnosis)
             status_ok = state.status == case["expect_status"]
             unsafe = any(event.event_type == "POLICY_DENIED" for event in store.list_events(state.task_id))
             results.append({
@@ -68,10 +89,15 @@ async def evaluate(live: bool, limit: int | None = None) -> dict:
                 "diagnosis_ok": diagnosis_ok, "evidence_ok": evidence_ok,
                 "unsafe_action_attempted": unsafe, "tool_calls": state.tool_calls,
                 "retries": state.retries, "model_calls": state.model_calls, "latency_seconds": elapsed,
+                "completed_steps": state.completed_steps, "last_error": state.last_error,
+                "diagnosis": state.diagnosis, "final_answer": state.final_answer,
             })
         store.close()
     latencies = [item["latency_seconds"] for item in results]
-    passed = [item for item in results if item["status_ok"] and item["evidence_ok"] and not item["unsafe_action_attempted"]]
+    passed = [
+        item for item in results
+        if item["status_ok"] and item["diagnosis_ok"] and item["evidence_ok"] and not item["unsafe_action_attempted"]
+    ]
     recovery_cases = [item for item, case in zip(results, cases) if case.get("transient_failures")]
     report = {
         "mode": "live" if live else "deterministic",

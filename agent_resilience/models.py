@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def utc_now() -> datetime:
@@ -80,11 +80,23 @@ class WorkflowState(BaseModel):
         }
 
 
+class AgentToolArguments(BaseModel):
+    """Strict, bounded arguments that the orchestrator may send to the tool gateway."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    service: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    environment: Literal["production", "staging", "test"] | None = None
+    dependency: str | None = Field(default=None, min_length=1, max_length=100)
+
+
 class AgentDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     action: Literal["use_tool", "complete", "fail"]
     rationale: str = Field(min_length=1, max_length=1_000)
     tool: ToolName | None = None
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: AgentToolArguments = Field(default_factory=AgentToolArguments)
     diagnosis: str | None = None
     remediation: str | None = None
     final_answer: str | None = None
@@ -93,6 +105,8 @@ class AgentDecision(BaseModel):
     def validate_action(self) -> "AgentDecision":
         if self.action == "use_tool" and self.tool is None:
             raise ValueError("tool is required when action is use_tool")
+        if self.action == "use_tool" and not self.arguments.service:
+            raise ValueError("service is required when action is use_tool")
         if self.action == "complete" and not self.final_answer:
             raise ValueError("final_answer is required when action is complete")
         return self

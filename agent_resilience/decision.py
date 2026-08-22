@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .config import Settings
-from .errors import RetryableWorkflowError
+from .errors import PermanentWorkflowError, RetryableWorkflowError
 from .models import AgentDecision, ToolName, WorkflowState
 
 
@@ -15,6 +15,9 @@ You are the orchestrator for a production incident response runtime. Decide exac
 You do not execute infrastructure operations directly; choose one bounded tool for the runtime gateway.
 Gather alert, metrics, logs, and dependency evidence as needed. Do not repeat a tool unless prior evidence is
 missing or explicitly inconclusive. Production restarts require human approval and database deletion is forbidden.
+When evidence supports a bounded production restart, request it by returning use_tool with restart_service; the
+runtime, not you, creates the approval gate and pauses execution. Do not return fail merely because approval is
+required. After restart_service is completed, use verify_recovery before completing the incident.
 Complete only when you can state a supported diagnosis, remediation, and recovery result. Return the typed output.
 Use specialist agents when their bounded analysis improves your decision.
 """.strip()
@@ -110,8 +113,18 @@ class OpenAIDecisionEngine(DecisionEngine):
         except RetryableWorkflowError:
             raise
         except Exception as error:
-            name = type(error).__name__
-            raise RetryableWorkflowError(f"OpenAI agent run failed ({name}): {error}") from error
+            raise self.classify_error(error) from error
+
+    @staticmethod
+    def classify_error(error: Exception) -> PermanentWorkflowError | RetryableWorkflowError:
+        from agents.exceptions import UserError
+        from openai import AuthenticationError, BadRequestError, NotFoundError, PermissionDeniedError
+
+        name = type(error).__name__
+        message = f"OpenAI agent run failed ({name}): {error}"
+        if isinstance(error, (UserError, AuthenticationError, PermissionDeniedError, BadRequestError, NotFoundError)):
+            return PermanentWorkflowError(message)
+        return RetryableWorkflowError(message)
 
     def _prompt(self, state: WorkflowState) -> str:
         evidence = json.dumps(state.evidence, sort_keys=True, default=str)

@@ -73,7 +73,8 @@ class WorkflowRuntime:
             return self._fail(state, decision.rationale, "agent_decision")
 
         assert decision.tool is not None
-        arguments, policy = self.gateway.validate_and_decide(decision.tool, decision.arguments)
+        requested_arguments = decision.arguments.model_dump(exclude_none=True)
+        arguments, policy = self.gateway.validate_and_decide(decision.tool, requested_arguments)
         state.current_step = decision.tool.value
         state.tool_history.append(decision.tool.value)
         state.progress_history.append(self._progress_fingerprint(state))
