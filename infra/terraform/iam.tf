@@ -32,8 +32,12 @@ resource "aws_iam_role_policy_attachment" "worker_execution" {
 
 data "aws_iam_policy_document" "api_execution_secrets" {
   statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.openai.arn, aws_secretsmanager_secret.admin.arn]
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      aws_secretsmanager_secret.openai.arn,
+      aws_secretsmanager_secret.admin.arn,
+      aws_secretsmanager_secret.viewer.arn,
+    ]
   }
 }
 
@@ -65,11 +69,15 @@ resource "aws_iam_role" "api" {
 data "aws_iam_policy_document" "api" {
   statement {
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"]
-    resources = [aws_dynamodb_table.workflows.arn]
+    resources = [aws_dynamodb_table.workflows.arn, "${aws_dynamodb_table.workflows.arn}/index/*"]
   }
   statement {
     actions   = ["sqs:SendMessage", "sqs:GetQueueAttributes"]
     resources = [aws_sqs_queue.tasks.arn, aws_sqs_queue.dead_letter.arn]
+  }
+  statement {
+    actions   = ["sqs:ReceiveMessage", "sqs:DeleteMessage"]
+    resources = [aws_sqs_queue.dead_letter.arn]
   }
   statement {
     actions   = ["cloudwatch:PutMetricData"]

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .errors import ConcurrentUpdateError
-from .models import EventRecord, QueueDelivery, WorkflowState, WorkflowStatus, utc_now
+from .models import DeadLetterRecord, EventRecord, QueueDelivery, WorkflowState, WorkflowStatus, utc_now
 
 
 class SQLiteStore:
@@ -126,6 +126,15 @@ class SQLiteStore:
             "SELECT state_json FROM workflows WHERE task_id=?", (task_id,)
         ).fetchone()
         return WorkflowState.model_validate_json(row["state_json"]) if row else None
+
+    def list_workflows(self, limit: int = 100, status: WorkflowStatus | None = None) -> list[WorkflowState]:
+        requested_limit = max(1, min(limit, 500))
+        rows = self._connection().execute(
+            "SELECT state_json FROM workflows ORDER BY updated_at DESC LIMIT ?",
+            (500 if status is not None else requested_limit,),
+        ).fetchall()
+        states = [WorkflowState.model_validate_json(row["state_json"]) for row in rows]
+        return [state for state in states if status is None or state.status == status][:requested_limit]
 
     def save_workflow(self, state: WorkflowState, expected_version: int) -> WorkflowState:
         state.version = expected_version + 1
@@ -279,3 +288,54 @@ class SQLiteStore:
     def queue_counts(self) -> dict[str, int]:
         rows = self._connection().execute("SELECT status,COUNT(*) AS count FROM queue GROUP BY status").fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def list_dead_letters(self, limit: int = 25) -> list[DeadLetterRecord]:
+        rows = self._connection().execute(
+            """SELECT id,task_id,attempts,max_attempts,last_error,payload_json,updated_at
+               FROM queue WHERE status='DEAD' ORDER BY updated_at DESC LIMIT ?""",
+            (max(1, min(limit, 100)),),
+        ).fetchall()
+        return [
+            DeadLetterRecord(
+                id=row["id"], task_id=row["task_id"], attempts=row["attempts"],
+                max_attempts=row["max_attempts"], last_error=row["last_error"],
+                payload=json.loads(row["payload_json"]), updated_at=datetime.fromisoformat(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def replay_dead_letter(
+        self, delivery_id: int | str, task_id: str, max_attempts: int, actor: str, reason: str
+    ) -> WorkflowState | None:
+        now = utc_now()
+        with self.transaction(immediate=True) as connection:
+            row = connection.execute(
+                "SELECT task_id FROM queue WHERE id=? AND task_id=? AND status='DEAD'", (delivery_id, task_id)
+            ).fetchone()
+            if not row:
+                return None
+            workflow_row = connection.execute(
+                "SELECT state_json,version FROM workflows WHERE task_id=?", (row["task_id"],)
+            ).fetchone()
+            if not workflow_row:
+                return None
+            state = WorkflowState.model_validate_json(workflow_row["state_json"])
+            expected_version = int(workflow_row["version"])
+            state.status = WorkflowStatus.QUEUED
+            state.last_error = None
+            state.version = expected_version + 1
+            state.updated_at = now
+            connection.execute(
+                "UPDATE workflows SET state_json=?,version=?,updated_at=? WHERE task_id=? AND version=?",
+                (state.model_dump_json(), state.version, now.isoformat(), state.task_id, expected_version),
+            )
+            connection.execute(
+                """UPDATE queue SET status='PENDING',attempts=0,max_attempts=?,available_at=?,lease_until=NULL,
+                   worker_id=NULL,last_error=NULL,updated_at=? WHERE id=? AND status='DEAD'""",
+                (max_attempts, now.isoformat(), now.isoformat(), delivery_id),
+            )
+            self._record_event(
+                connection, state.task_id, "DLQ_REPLAYED",
+                {"delivery_id": delivery_id, "actor": actor, "reason": reason},
+            )
+            return state

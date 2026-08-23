@@ -130,3 +130,28 @@ async def test_worker_extends_lease_during_long_model_call(test_settings):
     assert await worker.run_once()
     events = [event.event_type for event in store.list_events(state.task_id)]
     assert "QUEUE_LEASE_EXTENDED" in events
+
+
+@pytest.mark.asyncio
+async def test_runtime_checkpoints_model_token_usage(test_settings):
+    class UsageModel(DecisionEngine):
+        async def decide(self, state):
+            return AgentDecision(
+                action="complete",
+                rationale="usage-bearing decision completed",
+                final_answer="Incident analysis completed.",
+            )
+
+        def take_usage(self):
+            return 120, 30
+
+    store = SQLiteStore(test_settings.database_path)
+    runtime = WorkflowRuntime(store, UsageModel(), ToolGateway(store, ScenarioBackend()), LoopDetector())
+    worker = DurableWorker(store, runtime, test_settings, "usage-worker")
+    state = WorkflowState(task_id="incident-usage", goal="Track model usage for the operations dashboard")
+    store.create_workflow(state, 3)
+
+    assert await worker.run_once()
+    completed = store.get_workflow(state.task_id)
+    assert completed.input_tokens == 120
+    assert completed.output_tokens == 30

@@ -28,7 +28,20 @@ def aws_settings():
         TableName=table_name,
         BillingMode="PAY_PER_REQUEST",
         KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}, {"AttributeName": "sk", "KeyType": "RANGE"}],
-        AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}, {"AttributeName": "sk", "AttributeType": "S"}],
+        AttributeDefinitions=[
+            {"AttributeName": "pk", "AttributeType": "S"},
+            {"AttributeName": "sk", "AttributeType": "S"},
+            {"AttributeName": "entity_type", "AttributeType": "S"},
+            {"AttributeName": "updated_at", "AttributeType": "S"},
+        ],
+        GlobalSecondaryIndexes=[{
+            "IndexName": "entity_type-updated_at-index",
+            "KeySchema": [
+                {"AttributeName": "entity_type", "KeyType": "HASH"},
+                {"AttributeName": "updated_at", "KeyType": "RANGE"},
+            ],
+            "Projection": {"ProjectionType": "ALL"},
+        }],
     )
     waiter = dynamodb.get_waiter("table_exists")
     waiter.wait(TableName=table_name)

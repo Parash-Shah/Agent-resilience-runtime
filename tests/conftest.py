@@ -16,4 +16,5 @@ def test_settings(tmp_path: Path) -> Settings:
         queue_retry_base_seconds=0,
         run_worker=False,
         admin_api_token="test-admin-token",
+        viewer_api_token="test-viewer-token",
     )

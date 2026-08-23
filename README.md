@@ -19,6 +19,7 @@ AgentResilience investigates production incidents with an OpenAI Agents SDK orch
 - **Observability:** append-only DynamoDB audit events, OpenAI agent traces, Prometheus/Grafana locally, optional OpenTelemetry, and a deployed CloudWatch dashboard with workflow, retry, latency, tool-failure, loop, SQS/DLQ, and ECS panels.
 - **Evaluation:** 50 incident cases score task outcome, diagnosis, recovery after injected failures, evidence, safety, tool calls, retries, and P95 latency. `--live` evaluates the Agents SDK path.
 - **Deployment:** separate Fargate API/worker services, an ALB, ECR, Secrets Manager injection, encrypted SQS/DLQ, DynamoDB, least-privilege task roles, alarms, and CI validation through Terraform.
+- **Operations control plane:** responsive incident fleet view, live checkpoint/event streaming, evidence and audit timelines, approval controls, role-based viewer/administrator sessions, and audited DLQ replay.
 
 Select adapters with `RUNTIME_BACKEND=sqlite|aws` and `TOOL_BACKEND=scenario|aws`. Local development remains self-contained; AWS deployment uses the production adapters without changing workflow logic.
 
@@ -58,6 +59,8 @@ Run API and worker in separate terminals:
 ```
 
 API docs are at `http://localhost:8000/docs`.
+
+The operator dashboard is at `http://localhost:8000/`. Enter `ADMIN_API_TOKEN` for approval and replay controls, or `VIEWER_API_TOKEN` for a read-only session. Tokens stay in browser session storage and are not embedded in frontend assets.
 
 ## Exercise an incident
 
@@ -115,6 +118,7 @@ terraform -chdir=infra/terraform apply
 .venv\Scripts\python.exe scripts/publish_aws_secrets.py `
   --openai-secret-id <openai_secret_arn> `
   --admin-secret-id <admin_secret_arn> `
+  --viewer-secret-id <viewer_secret_arn> `
   --region us-east-1
 
 terraform -chdir=infra/terraform apply `
@@ -153,7 +157,7 @@ src/, test/         original Java proof of concept retained for history
 ## Security notes
 
 - Never commit `.env` or `.env.local`.
-- Set a strong `ADMIN_API_TOKEN` in any shared environment.
+- Set separate strong `ADMIN_API_TOKEN` and `VIEWER_API_TOKEN` values in any shared environment.
 - Restrict `operations_service_arns` and `operations_log_group_arns` to the exact resources the agent is allowed to touch; never expose AWS credentials to prompts.
 - Terminate TLS and add your organization identity layer in front of the API before production use.
 

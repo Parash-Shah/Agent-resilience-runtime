@@ -6,7 +6,7 @@ This module provisions:
 - a point-in-time-recoverable DynamoDB single table for checkpoints, audit events, approvals, and idempotency results;
 - ECR and separate Fargate API/worker task definitions and services;
 - an Application Load Balancer and task security groups;
-- Secrets Manager entries for `OPENAI_API_KEY` and `ADMIN_API_TOKEN`;
+- Secrets Manager entries for `OPENAI_API_KEY`, `ADMIN_API_TOKEN`, and the read-only `VIEWER_API_TOKEN`;
 - separate API, worker, and execution roles with resource-scoped policies;
 - CloudWatch log groups, alarms, Container Insights, and the runtime dashboard.
 
@@ -47,6 +47,7 @@ Publish values from the ignored `.env.local` without putting secret plaintext in
 ..\..\.venv\Scripts\python.exe ..\..\scripts\publish_aws_secrets.py `
   --openai-secret-id (terraform output -raw openai_secret_arn) `
   --admin-secret-id (terraform output -raw admin_secret_arn) `
+  --viewer-secret-id (terraform output -raw viewer_secret_arn) `
   --region us-east-1
 ```
 

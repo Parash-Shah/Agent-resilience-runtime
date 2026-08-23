@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-resilience-runtime"
-version = "0.3.0"
+version = "0.4.0"
 description = "A fault-tolerant runtime for reliable autonomous AI agents"
 readme = "README.md"
 requires-python = ">=3.11"

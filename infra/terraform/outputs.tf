@@ -33,3 +33,7 @@ output "openai_secret_arn" {
 output "admin_secret_arn" {
   value = aws_secretsmanager_secret.admin.arn
 }
+
+output "viewer_secret_arn" {
+  value = aws_secretsmanager_secret.viewer.arn
+}

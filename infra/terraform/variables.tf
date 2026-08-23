@@ -78,6 +78,11 @@ variable "admin_secret_name" {
   default = "agent-resilience/admin-api-token"
 }
 
+variable "viewer_secret_name" {
+  type    = string
+  default = "agent-resilience/viewer-api-token"
+}
+
 variable "operations_ecs_cluster_name" {
   description = "ECS cluster containing the service the agent may inspect/redeploy."
   type        = string

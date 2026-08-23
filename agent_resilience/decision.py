@@ -27,6 +27,9 @@ class DecisionEngine(ABC):
     @abstractmethod
     async def decide(self, state: WorkflowState) -> AgentDecision: ...
 
+    def take_usage(self) -> tuple[int, int]:
+        return 0, 0
+
 
 class DeterministicDecisionEngine(DecisionEngine):
     """Offline reference policy used by tests and reliability fault injection."""
@@ -74,6 +77,7 @@ class OpenAIDecisionEngine(DecisionEngine):
         from agents import Agent, set_default_openai_key, set_tracing_export_api_key
 
         self.config = config
+        self._last_usage = (0, 0)
         set_default_openai_key(config.openai_api_key)
         set_tracing_export_api_key(config.openai_api_key)
         log_specialist = Agent(
@@ -107,6 +111,8 @@ class OpenAIDecisionEngine(DecisionEngine):
         try:
             with trace("agent-resilience-incident", group_id=state.task_id):
                 result = await Runner.run(self.agent, prompt, max_turns=self.config.max_agent_turns)
+            usage = result.context_wrapper.usage
+            self._last_usage = (usage.input_tokens, usage.output_tokens)
             if not isinstance(result.final_output, AgentDecision):
                 raise RetryableWorkflowError("agent returned invalid structured output")
             return result.final_output
@@ -114,6 +120,11 @@ class OpenAIDecisionEngine(DecisionEngine):
             raise
         except Exception as error:
             raise self.classify_error(error) from error
+
+    def take_usage(self) -> tuple[int, int]:
+        usage = self._last_usage
+        self._last_usage = (0, 0)
+        return usage
 
     @staticmethod
     def classify_error(error: Exception) -> PermanentWorkflowError | RetryableWorkflowError:

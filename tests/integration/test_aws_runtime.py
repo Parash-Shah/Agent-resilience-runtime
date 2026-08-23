@@ -72,6 +72,11 @@ async def test_repeated_failures_are_explicitly_dead_lettered(aws_settings):
     failed = store.get_workflow(state.task_id)
     assert failed.status == WorkflowStatus.DEAD_LETTERED
     assert store.queue_counts()["DEAD"] >= 1
+    dead = store.list_dead_letters()
+    assert dead and dead[0].task_id == state.task_id
+    replayed = store.replay_dead_letter(dead[0].id, state.task_id, 3, "integration-test", "outage resolved")
+    assert replayed and replayed.status == WorkflowStatus.QUEUED
+    assert any(event.event_type == "DLQ_REPLAYED" for event in store.list_events(state.task_id))
 
 
 def test_completed_side_effect_is_replayed_from_idempotency_ledger(aws_settings):

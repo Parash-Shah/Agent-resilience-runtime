@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AgentResilience Control Plane</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="AgentResilience home">
+        <span class="brand-mark">AR</span>
+        <span><strong>AgentResilience</strong><small>Operations control plane</small></span>
+      </a>
+      <nav>
+        <button class="nav-item active" data-view="operations"><span>01</span>Operations</button>
+        <button class="nav-item" data-view="dead-letters"><span>02</span>Dead letters</button>
+      </nav>
+      <div class="runtime-card">
+        <span class="pulse"></span>
+        <div><strong id="runtime-status">Connecting</strong><small id="runtime-mode">Runtime status</small></div>
+      </div>
+      <button id="disconnect" class="text-button">Disconnect token</button>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">AUTONOMOUS OPERATIONS / RELIABILITY</p>
+          <h1>Incident command</h1>
+        </div>
+        <button id="new-incident" class="primary-button">Start incident</button>
+      </header>
+
+      <section id="operations-view" class="view active">
+        <div class="metric-grid">
+          <article class="metric"><span>Success rate</span><strong id="success-rate">—</strong><small>terminal workflows</small></article>
+          <article class="metric"><span>Active incidents</span><strong id="active-incidents">—</strong><small>running or awaiting action</small></article>
+          <article class="metric"><span>Total retries</span><strong id="total-retries">—</strong><small>model and tool recovery</small></article>
+          <article class="metric"><span>P95 latency</span><strong id="p95-latency">—</strong><small>end-to-end completion</small></article>
+          <article class="metric"><span>Tool failures</span><strong id="tool-failures">—</strong><small>retryable downstream calls</small></article>
+          <article class="metric"><span>DLQ depth</span><strong id="dlq-depth">—</strong><small>operator attention required</small></article>
+          <article class="metric"><span>Model tokens</span><strong id="model-tokens">—</strong><small>recorded Agents SDK usage</small></article>
+          <article class="metric"><span>Loop detections</span><strong id="loop-detections">—</strong><small>workflows stopped safely</small></article>
+        </div>
+
+        <section class="panel incidents-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">DURABLE WORKFLOWS</p><h2>Incident queue</h2></div>
+            <div class="filters">
+              <select id="status-filter" aria-label="Filter incidents by status">
+                <option value="">All statuses</option>
+                <option>RUNNING</option><option>QUEUED</option><option>WAITING_FOR_APPROVAL</option>
+                <option>COMPLETED</option><option>FAILED</option><option>DEAD_LETTERED</option>
+                <option>LOOP_STOPPED</option><option>HUMAN_REJECTED</option>
+              </select>
+              <button id="refresh" class="secondary-button">Refresh</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Incident</th><th>Status</th><th>Current step</th><th>Progress</th><th>Retries</th><th>Updated</th></tr></thead>
+              <tbody id="incident-list"><tr><td colspan="6" class="empty">Connect an administrator token to load incidents.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="dead-letters-view" class="view">
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">RECOVERY OPERATIONS</p><h2>Dead-letter queue</h2></div>
+            <button id="refresh-dlq" class="secondary-button">Refresh</button>
+          </div>
+          <p class="panel-copy">Replay is administrator-only, audited, and resumes the existing checkpoint. Completed side effects remain protected by the idempotency ledger.</p>
+          <div class="table-wrap">
+            <table><thead><tr><th>Incident</th><th>Attempts</th><th>Last error</th><th>Failed</th><th></th></tr></thead>
+              <tbody id="dlq-list"><tr><td colspan="5" class="empty">No dead-letter deliveries loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <aside id="detail-panel" class="detail-panel" aria-hidden="true">
+    <div class="detail-header">
+      <div><p class="eyebrow">INCIDENT DETAIL</p><h2 id="detail-id">—</h2></div>
+      <button id="close-detail" class="icon-button" aria-label="Close incident detail">×</button>
+    </div>
+    <div id="detail-content" class="detail-content"></div>
+  </aside>
+  <div id="scrim" class="scrim"></div>
+
+  <dialog id="token-dialog">
+    <form id="token-form" method="dialog">
+      <p class="eyebrow">SECURE OPERATOR SESSION</p>
+      <h2>Connect to the control plane</h2>
+      <p>The bearer token stays in this browser tab and is sent only to administrator-protected endpoints.</p>
+      <label>Administrator token<input id="admin-token" type="password" autocomplete="current-password" required></label>
+      <button class="primary-button" type="submit">Connect</button>
+    </form>
+  </dialog>
+
+  <dialog id="incident-dialog">
+    <form id="incident-form" method="dialog">
+      <p class="eyebrow">NEW DURABLE WORKFLOW</p><h2>Start incident investigation</h2>
+      <label>Goal<textarea id="incident-goal" required minlength="10">Investigate why checkout-service has elevated production errors and safely restore service.</textarea></label>
+      <div class="dialog-actions"><button id="cancel-incident" class="secondary-button" type="button">Cancel</button><button class="primary-button" type="submit">Start investigation</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="action-dialog">
+    <form id="action-form" method="dialog">
+      <p class="eyebrow" id="action-eyebrow">HUMAN APPROVAL</p><h2 id="action-title">Review action</h2>
+      <div id="action-summary" class="action-summary"></div>
+      <label>Operator name<input id="action-actor" value="on-call" required></label>
+      <label>Decision reason<textarea id="action-reason" required minlength="3"></textarea></label>
+      <div class="dialog-actions"><button id="cancel-action" class="secondary-button" type="button">Cancel</button><button id="action-submit" class="primary-button" type="submit">Confirm</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

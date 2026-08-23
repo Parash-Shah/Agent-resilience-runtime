@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--env-file", type=Path, default=Path(".env.local"))
     parser.add_argument("--openai-secret-id", required=True)
     parser.add_argument("--admin-secret-id", required=True)
+    parser.add_argument("--viewer-secret-id", required=True)
     parser.add_argument("--region", default="us-east-1")
     args = parser.parse_args()
     client = boto3.client("secretsmanager", region_name=args.region)
@@ -35,4 +36,8 @@ def main() -> None:
         SecretId=args.admin_secret_id,
         SecretString=read_env_value(args.env_file, "ADMIN_API_TOKEN"),
     )
-    print("Published OPENAI_API_KEY and ADMIN_API_TOKEN to the requested secret IDs without displaying values.")
+    client.put_secret_value(
+        SecretId=args.viewer_secret_id,
+        SecretString=read_env_value(args.env_file, "VIEWER_API_TOKEN"),
+    )
+    print("Published the OpenAI, administrator, and viewer credentials without displaying values.")

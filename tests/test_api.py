@@ -24,6 +24,70 @@ def test_api_exposes_health_incident_and_events(test_settings):
         assert client.get("/metrics").status_code == 200
 
 
+def test_dashboard_serves_ui_and_protected_operational_views(test_settings):
+    app = create_app(test_settings, DeterministicDecisionEngine())
+    headers = {"Authorization": "Bearer test-admin-token"}
+    viewer_headers = {"Authorization": "Bearer test-viewer-token"}
+    with TestClient(app) as client:
+        assert "AgentResilience Control Plane" in client.get("/").text
+        assert client.get("/assets/app.js").status_code == 200
+        assert client.get("/v1/dashboard/summary").status_code == 401
+        assert client.get("/v1/dashboard/session", headers=viewer_headers).json() == {"role": "viewer"}
+        assert client.get("/v1/dashboard/session", headers=headers).json() == {"role": "administrator"}
+        created = client.post(
+            "/v1/incidents",
+            json={"goal": "Investigate checkout errors through the operations dashboard"},
+        ).json()
+        incidents = client.get("/v1/dashboard/incidents", headers=headers).json()
+        assert incidents[0]["task_id"] == created["task_id"]
+        summary = client.get("/v1/dashboard/summary", headers=headers).json()
+        assert summary["total_incidents"] == 1
+        assert "queue" in summary and "statuses" in summary
+        assert client.get("/v1/dashboard/incidents", headers=viewer_headers).status_code == 200
+        assert client.post(
+            "/v1/dashboard/dead-letters/replay",
+            headers=viewer_headers,
+            json={"delivery_id": 1, "task_id": created["task_id"], "actor": "viewer", "reason": "not allowed"},
+        ).status_code == 401
+
+
+def test_dashboard_streams_terminal_snapshot_and_replays_dlq(test_settings):
+    app = create_app(test_settings, DeterministicDecisionEngine())
+    headers = {"Authorization": "Bearer test-admin-token"}
+    with TestClient(app) as client:
+        created = client.post(
+            "/v1/incidents",
+            json={"goal": "Exercise dashboard event streaming and dead-letter replay"},
+        ).json()
+        task_id = created["task_id"]
+        store = app.state.store
+        dead_lettered = False
+        for _ in range(test_settings.max_queue_attempts):
+            delivery = store.claim("failing-worker", 30)
+            assert delivery
+            dead_lettered = store.retry_or_dead_letter(delivery, "injected outage", 0)
+        assert dead_lettered
+        workflow = store.get_workflow(task_id)
+        workflow.status = WorkflowStatus.DEAD_LETTERED
+        store.save_workflow(workflow, workflow.version)
+
+        stream = client.get(f"/v1/dashboard/incidents/{task_id}/stream", headers=headers)
+        assert stream.status_code == 200
+        assert "event: incident" in stream.text and "DEAD_LETTERED" in stream.text
+
+        dead = client.get("/v1/dashboard/dead-letters", headers=headers).json()
+        replayed = client.post(
+            "/v1/dashboard/dead-letters/replay",
+            headers=headers,
+            json={
+                "delivery_id": dead[0]["id"], "task_id": task_id,
+                "actor": "on-call", "reason": "dependency recovered",
+            },
+        )
+        assert replayed.status_code == 200
+        assert replayed.json()["status"] == WorkflowStatus.QUEUED
+
+
 def test_api_requires_authorization_and_resumes_after_approval(test_settings):
     app = create_app(test_settings, DeterministicDecisionEngine())
     headers = {"Authorization": "Bearer test-admin-token"}

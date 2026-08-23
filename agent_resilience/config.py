@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.6-terra"
     agent_mode: str = "live"
     admin_api_token: str | None = None
+    viewer_api_token: str | None = None
     max_agent_turns: int = 12
     max_queue_attempts: int = 5
     queue_lease_seconds: int = 60

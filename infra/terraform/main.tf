@@ -43,6 +43,23 @@ resource "aws_dynamodb_table" "workflows" {
     type = "S"
   }
 
+  attribute {
+    name = "entity_type"
+    type = "S"
+  }
+
+  attribute {
+    name = "updated_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "entity_type-updated_at-index"
+    hash_key        = "entity_type"
+    range_key       = "updated_at"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery { enabled = true }
   server_side_encryption { enabled = true }
   tags = local.tags

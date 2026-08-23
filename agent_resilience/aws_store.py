@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -12,7 +12,7 @@ from botocore.exceptions import ClientError
 
 from .config import Settings
 from .errors import ConcurrentUpdateError, PermanentWorkflowError, RetryableWorkflowError
-from .models import EventRecord, QueueDelivery, WorkflowState, utc_now
+from .models import DeadLetterRecord, EventRecord, QueueDelivery, WorkflowState, WorkflowStatus, utc_now
 
 
 class AWSDurableStore:
@@ -68,6 +68,20 @@ class AWSDurableStore:
             raise self._aws_error("read checkpoint", error) from error
         item = response.get("Item")
         return WorkflowState.model_validate_json(item["state_json"]) if item else None
+
+    def list_workflows(self, limit: int = 100, status: WorkflowStatus | None = None) -> list[WorkflowState]:
+        requested_limit = max(1, min(limit, 500))
+        try:
+            response = self.table.query(
+                IndexName="entity_type-updated_at-index",
+                KeyConditionExpression=Key("entity_type").eq("WORKFLOW"),
+                ScanIndexForward=False,
+                Limit=500 if status is not None else requested_limit,
+            )
+        except ClientError as error:
+            raise self._aws_error("list workflows", error) from error
+        states = [WorkflowState.model_validate_json(item["state_json"]) for item in response.get("Items", [])]
+        return [state for state in states if status is None or state.status == status][:requested_limit]
 
     def save_workflow(self, state: WorkflowState, expected_version: int) -> WorkflowState:
         state.version = expected_version + 1
@@ -155,6 +169,7 @@ class AWSDurableStore:
                         "task_id": delivery.task_id,
                         "payload": delivery.payload,
                         "attempts": delivery.attempts,
+                        "max_attempts": delivery.max_attempts,
                         "error": error[:2_000],
                     }),
                 )
@@ -302,6 +317,58 @@ class AWSDurableStore:
             return counts
         except ClientError as error:
             raise self._aws_error("read queue depth", error) from error
+
+    def list_dead_letters(self, limit: int = 25) -> list[DeadLetterRecord]:
+        if not self.dlq_url:
+            return []
+        try:
+            response = self.sqs.receive_message(
+                QueueUrl=self.dlq_url,
+                MaxNumberOfMessages=max(1, min(limit, 10)),
+                VisibilityTimeout=0,
+                WaitTimeSeconds=0,
+                MessageSystemAttributeNames=["ApproximateReceiveCount", "SentTimestamp"],
+            )
+        except ClientError as error:
+            raise self._aws_error("list dead letters", error) from error
+        records = []
+        for message in response.get("Messages", []):
+            body = json.loads(message["Body"])
+            attributes = message.get("Attributes", {})
+            sent_at = datetime.fromtimestamp(int(attributes.get("SentTimestamp", "0")) / 1_000, tz=UTC)
+            records.append(DeadLetterRecord(
+                id=message["ReceiptHandle"],
+                task_id=body["task_id"],
+                attempts=int(body.get("attempts", attributes.get("ApproximateReceiveCount", 1))),
+                max_attempts=int(body.get("max_attempts", 5)),
+                last_error=body.get("error"),
+                payload=body.get("payload", {}),
+                updated_at=sent_at,
+            ))
+        return records
+
+    def replay_dead_letter(
+        self, delivery_id: int | str, task_id: str, max_attempts: int, actor: str, reason: str
+    ) -> WorkflowState | None:
+        if not self.dlq_url:
+            return None
+        receipt = str(delivery_id)
+        state = self.get_workflow(task_id)
+        if state is None:
+            return None
+        state.status = WorkflowStatus.QUEUED
+        state.last_error = None
+        state = self.save_workflow(state, state.version)
+        try:
+            self.sqs.send_message(
+                QueueUrl=self.queue_url,
+                MessageBody=json.dumps({"task_id": task_id, "max_attempts": max_attempts, "payload": {}}),
+            )
+            self.sqs.delete_message(QueueUrl=self.dlq_url, ReceiptHandle=receipt)
+        except ClientError as error:
+            raise self._aws_error("replay dead letter", error) from error
+        self.record_event(task_id, "DLQ_REPLAYED", {"actor": actor, "reason": reason})
+        return state
 
     @staticmethod
     def _aws_error(operation: str, error: ClientError) -> RetryableWorkflowError | PermanentWorkflowError:

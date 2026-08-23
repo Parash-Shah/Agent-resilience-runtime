@@ -17,6 +17,7 @@ locals {
   api_secrets = [
     { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.openai.arn },
     { name = "ADMIN_API_TOKEN", valueFrom = aws_secretsmanager_secret.admin.arn },
+    { name = "VIEWER_API_TOKEN", valueFrom = aws_secretsmanager_secret.viewer.arn },
   ]
   worker_secrets = [
     { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.openai.arn },
@@ -55,6 +56,12 @@ resource "aws_secretsmanager_secret" "openai" {
 
 resource "aws_secretsmanager_secret" "admin" {
   name                    = "${var.admin_secret_name}/${var.environment}"
+  recovery_window_in_days = 7
+  tags                    = local.tags
+}
+
+resource "aws_secretsmanager_secret" "viewer" {
+  name                    = "${var.viewer_secret_name}/${var.environment}"
   recovery_window_in_days = 7
   tags                    = local.tags
 }

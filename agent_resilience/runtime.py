@@ -54,6 +54,9 @@ class WorkflowRuntime:
             emit_metric("DecisionLatency", elapsed)
 
         state.model_calls += 1
+        input_tokens, output_tokens = self.engine.take_usage()
+        state.input_tokens += input_tokens
+        state.output_tokens += output_tokens
         self.store.record_event(task_id, "AGENT_DECISION", decision.model_dump(mode="json"))
         if decision.diagnosis:
             state.diagnosis = decision.diagnosis

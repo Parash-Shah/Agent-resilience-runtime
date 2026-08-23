@@ -65,6 +65,8 @@ class WorkflowState(BaseModel):
     last_error: str | None = None
     retries: int = 0
     model_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
     tool_calls: int = 0
     version: int = 0
     created_at: datetime = Field(default_factory=utc_now)
@@ -120,6 +122,23 @@ class CreateIncidentRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     actor: str = Field(default="human", min_length=1, max_length=200)
     reason: str | None = Field(default=None, max_length=1_000)
+
+
+class ReplayDeadLetterRequest(BaseModel):
+    delivery_id: int | str
+    task_id: str = Field(min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
+    actor: str = Field(default="operator", min_length=1, max_length=200)
+    reason: str = Field(min_length=3, max_length=1_000)
+
+
+class DeadLetterRecord(BaseModel):
+    id: int | str
+    task_id: str
+    attempts: int
+    max_attempts: int
+    last_error: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    updated_at: datetime
 
 
 class EventRecord(BaseModel):

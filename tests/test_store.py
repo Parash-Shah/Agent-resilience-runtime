@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from agent_resilience.errors import ConcurrentUpdateError
-from agent_resilience.models import WorkflowState
+from agent_resilience.models import WorkflowState, WorkflowStatus
 from agent_resilience.store import SQLiteStore
 
 
@@ -33,6 +33,24 @@ def test_queue_reclaims_expired_lease_and_dead_letters(test_settings):
     assert reclaimed and reclaimed.id == first.id and reclaimed.attempts == 2
     assert store.retry_or_dead_letter(reclaimed, "still failing", base_delay_seconds=0)
     assert store.queue_counts()["DEAD"] == 1
+
+
+def test_dead_letter_replay_resumes_checkpoint_and_is_audited(test_settings):
+    store = SQLiteStore(test_settings.database_path)
+    state = WorkflowState(task_id="incident-replay", goal="Resume this failed production investigation")
+    store.create_workflow(state, 1)
+    delivery = store.claim("worker", lease_seconds=30)
+    assert delivery and store.retry_or_dead_letter(delivery, "dependency unavailable", 0)
+    state.status = WorkflowStatus.DEAD_LETTERED
+    store.save_workflow(state, state.version)
+
+    dead = store.list_dead_letters()
+    assert len(dead) == 1
+    replayed = store.replay_dead_letter(dead[0].id, state.task_id, 3, "on-call", "dependency recovered")
+
+    assert replayed and replayed.status == WorkflowStatus.QUEUED
+    assert store.queue_counts()["PENDING"] == 1
+    assert any(event.event_type == "DLQ_REPLAYED" for event in store.list_events(state.task_id))
 
 
 def test_idempotency_rejects_argument_reuse(test_settings):
