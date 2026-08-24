@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     queue_heartbeat_seconds: float = 20.0
     queue_retry_base_seconds: float = 1.0
     worker_poll_seconds: float = 0.5
+    chaos_pause_tool: str | None = None
+    chaos_pause_after_steps: int | None = None
+    chaos_pause_seconds: float = 0.0
     run_worker: bool = False
     max_evidence_chars: int = 12_000
     otel_exporter_otlp_endpoint: str | None = None

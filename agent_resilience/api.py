@@ -29,9 +29,17 @@ from .worker import DurableWorker
 
 
 def create_app(config: Settings = settings, engine: DecisionEngine | None = None) -> FastAPI:
+    if config.runtime_backend == "aws" and (not config.admin_api_token or not config.viewer_api_token):
+        raise ValueError("AWS runtime requires ADMIN_API_TOKEN and VIEWER_API_TOKEN")
     store = build_store(config)
     runtime = WorkflowRuntime(
-        store, engine or build_decision_engine(config), ToolGateway(store, build_tool_backend(config)), LoopDetector()
+        store,
+        engine or build_decision_engine(config),
+        ToolGateway(store, build_tool_backend(config)),
+        LoopDetector(),
+        config.chaos_pause_tool,
+        config.chaos_pause_after_steps,
+        config.chaos_pause_seconds,
     )
     worker = DurableWorker(store, runtime, config)
     configure_cloudwatch_metrics(config)
@@ -49,7 +57,7 @@ def create_app(config: Settings = settings, engine: DecisionEngine | None = None
 
     app = FastAPI(
         title="AgentResilience",
-        version="0.4.0",
+        version="1.0.0",
         description="Durable, policy-bound execution for autonomous incident response agents.",
         lifespan=lifespan,
     )
@@ -91,7 +99,12 @@ def create_app(config: Settings = settings, engine: DecisionEngine | None = None
     async def metrics() -> Response:
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
-    @app.post("/v1/incidents", response_model=WorkflowState, status_code=status.HTTP_202_ACCEPTED)
+    @app.post(
+        "/v1/incidents",
+        response_model=WorkflowState,
+        status_code=status.HTTP_202_ACCEPTED,
+        dependencies=[Depends(require_admin)],
+    )
     async def create_incident(request: CreateIncidentRequest) -> WorkflowState:
         task_id = f"incident-{uuid.uuid4().hex[:12]}"
         state = WorkflowState(task_id=task_id, goal=request.goal, scenario_id=request.scenario_id)
@@ -100,11 +113,11 @@ def create_app(config: Settings = settings, engine: DecisionEngine | None = None
         emit_metric("WorkflowsCreated")
         return state
 
-    @app.get("/v1/incidents/{task_id}", response_model=WorkflowState)
+    @app.get("/v1/incidents/{task_id}", response_model=WorkflowState, dependencies=[Depends(require_viewer)])
     async def get_incident(task_id: str) -> WorkflowState:
         return _required(store, task_id)
 
-    @app.get("/v1/incidents/{task_id}/events")
+    @app.get("/v1/incidents/{task_id}/events", dependencies=[Depends(require_viewer)])
     async def get_events(task_id: str):
         _required(store, task_id)
         return store.list_events(task_id)

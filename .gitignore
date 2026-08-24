@@ -45,3 +45,4 @@ htmlcov/
 !*.tfvars.example
 *.tfplan
 crash.log
+evidence/milestone4/*.json

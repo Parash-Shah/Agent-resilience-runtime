@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -14,11 +15,23 @@ from .tools import ToolGateway
 
 
 class WorkflowRuntime:
-    def __init__(self, store: RuntimeStore, engine: DecisionEngine, gateway: ToolGateway, loop_detector: LoopDetector | None = None):
+    def __init__(
+        self,
+        store: RuntimeStore,
+        engine: DecisionEngine,
+        gateway: ToolGateway,
+        loop_detector: LoopDetector | None = None,
+        chaos_pause_tool: str | None = None,
+        chaos_pause_after_steps: int | None = None,
+        chaos_pause_seconds: float = 0.0,
+    ):
         self.store = store
         self.engine = engine
         self.gateway = gateway
         self.loop_detector = loop_detector or LoopDetector()
+        self.chaos_pause_tool = chaos_pause_tool
+        self.chaos_pause_after_steps = chaos_pause_after_steps
+        self.chaos_pause_seconds = max(0.0, chaos_pause_seconds)
 
     async def process(self, task_id: str) -> WorkflowState:
         state = self._required_state(task_id)
@@ -106,6 +119,15 @@ class WorkflowRuntime:
             self.store.create_approval(task_id, action_id)
             self.store.record_event(task_id, "APPROVAL_REQUIRED", state.pending_action.model_dump(mode="json"))
             return state
+        pause_for_tool = decision.tool.value == self.chaos_pause_tool
+        pause_after_checkpoint = self.chaos_pause_after_steps == len(state.completed_steps)
+        if self.chaos_pause_seconds and (pause_for_tool or pause_after_checkpoint):
+            self.store.record_event(
+                task_id,
+                "CHAOS_PAUSE_STARTED",
+                {"tool": decision.tool.value, "seconds": self.chaos_pause_seconds},
+            )
+            await asyncio.sleep(self.chaos_pause_seconds)
         return self._execute_tool(state, decision.tool, arguments)
 
     def _resume_approved_action(self, state: WorkflowState) -> WorkflowState:

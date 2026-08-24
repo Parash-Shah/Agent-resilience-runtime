@@ -36,7 +36,7 @@ class AWSOperationsBackend:
             if tool == ToolName.RESTART_SERVICE:
                 return self._restart_service(arguments)
             if tool == ToolName.VERIFY_RECOVERY:
-                return {"service": self._service_health(arguments), "metrics": self._inspect_metrics(arguments)}
+                return self._verify_recovery(arguments)
             raise PermanentWorkflowError(f"AWS backend does not implement {tool.value}")
         except PermanentWorkflowError:
             raise
@@ -143,6 +143,23 @@ class AWSOperationsBackend:
             "deployment_status": deployment.get("status"),
             "restarted": True,
         }
+
+    def _verify_recovery(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        service = self._service_health(arguments)
+        deployments = service["deployments"]
+        rollout_complete = (
+            service["running_count"] >= service["desired_count"]
+            and service["pending_count"] == 0
+            and len(deployments) == 1
+            and deployments[0].get("rollout_state") in {None, "COMPLETED"}
+        )
+        if not rollout_complete:
+            raise RetryableWorkflowError("ECS replacement deployment is not stable yet")
+        metrics = self._inspect_metrics(arguments)
+        error_rate = metrics.get("error_rate_percent")
+        if error_rate is None or float(error_rate) >= 1.0:
+            raise RetryableWorkflowError("healthy post-restart CloudWatch evidence is not available yet")
+        return {"service": service, "metrics": metrics, "recovered": True}
 
     def _service_name(self, requested: str) -> str:
         return f"{self.config.ecs_service_prefix}{requested}"

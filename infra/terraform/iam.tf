@@ -30,6 +30,17 @@ resource "aws_iam_role_policy_attachment" "worker_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+resource "aws_iam_role" "demo_execution" {
+  name               = "${local.prefix}-demo-execution"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+  tags               = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "demo_execution" {
+  role       = aws_iam_role.demo_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
 data "aws_iam_policy_document" "api_execution_secrets" {
   statement {
     actions = ["secretsmanager:GetSecretValue"]
@@ -96,6 +107,30 @@ resource "aws_iam_role_policy" "api" {
   policy = data.aws_iam_policy_document.api.json
 }
 
+resource "aws_iam_role" "demo" {
+  name               = "${local.prefix}-demo"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+  tags               = local.tags
+}
+
+data "aws_iam_policy_document" "demo" {
+  statement {
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["AgentResilience/Services"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "demo" {
+  name   = "publish-service-metrics"
+  role   = aws_iam_role.demo.id
+  policy = data.aws_iam_policy_document.demo.json
+}
+
 resource "aws_iam_role" "worker" {
   name               = "${local.prefix}-worker"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
@@ -116,7 +151,7 @@ data "aws_iam_policy_document" "worker" {
   }
   statement {
     actions   = ["logs:FilterLogEvents"]
-    resources = var.operations_log_group_arns
+    resources = local.allowed_log_group_arns
   }
   statement {
     actions   = ["cloudwatch:DescribeAlarms", "cloudwatch:GetMetricStatistics"]
@@ -133,11 +168,11 @@ data "aws_iam_policy_document" "worker" {
   }
   statement {
     actions   = ["ecs:UpdateService"]
-    resources = var.operations_service_arns
+    resources = local.allowed_service_arns
   }
   statement {
     actions   = ["ecs:DescribeServices"]
-    resources = ["*"]
+    resources = local.allowed_service_arns
   }
 }
 

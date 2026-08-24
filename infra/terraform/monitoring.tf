@@ -10,6 +10,12 @@ resource "aws_cloudwatch_log_group" "worker" {
   tags              = local.tags
 }
 
+resource "aws_cloudwatch_log_group" "demo" {
+  name              = "/ecs/${local.prefix}/checkout-service"
+  retention_in_days = 30
+  tags              = local.tags
+}
+
 resource "aws_cloudwatch_dashboard" "runtime" {
   dashboard_name = "${local.prefix}-runtime"
   dashboard_body = jsonencode({
@@ -63,12 +69,34 @@ resource "aws_cloudwatch_dashboard" "runtime" {
             ["...", aws_ecs_service.worker.name]
           ]
         }
+      },
+      {
+        type = "metric", x = 0, y = 12, width = 12, height = 6
+        properties = {
+          title = "Checkout evidence", region = var.aws_region, stat = "Average", period = 10
+          metrics = [
+            ["AgentResilience/Services", "ErrorRate", "ServiceName", "checkout-service", "Environment", "production"],
+            [".", "Latency", ".", ".", ".", ".", { yAxis = "right" }]
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 12, width = 12, height = 6
+        properties = {
+          title = "API load balancer failures", region = var.aws_region, stat = "Sum", period = 60
+          metrics = [
+            ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", aws_lb.api.arn_suffix],
+            [".", "RejectedConnectionCount", ".", "."]
+          ]
+        }
       }
     ]
   })
 }
 
 resource "aws_cloudwatch_metric_alarm" "worker_service_empty" {
+  count = var.worker_desired_count > 0 ? 1 : 0
+
   alarm_name          = "${local.prefix}-worker-service-empty"
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = 2
@@ -80,6 +108,41 @@ resource "aws_cloudwatch_metric_alarm" "worker_service_empty" {
   dimensions = {
     ClusterName = aws_ecs_cluster.runtime.name
     ServiceName = aws_ecs_service.worker.name
+  }
+  tags = local.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "checkout_errors" {
+  count = var.demo_desired_count > 0 ? 1 : 0
+
+  alarm_name          = "checkout-service-elevated-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  metric_name         = "ErrorRate"
+  namespace           = "AgentResilience/Services"
+  period              = 10
+  statistic           = "Average"
+  threshold           = 5
+  alarm_description   = "Controlled checkout demo has entered its connection-pool failure mode."
+  dimensions = {
+    ServiceName = "checkout-service"
+    Environment = "production"
+  }
+  tags = local.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_target_5xx" {
+  alarm_name          = "${local.prefix}-api-target-5xx"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 5
+  dimensions = {
+    LoadBalancer = aws_lb.api.arn_suffix
   }
   tags = local.tags
 }

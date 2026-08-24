@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -45,14 +49,36 @@ async def test_worker_crash_after_step_three_resumes_from_step_four(aws_settings
     state = WorkflowState(task_id="incident-chaos", goal="Investigate checkout failures and recover safely")
     store.create_workflow(state, aws_settings.max_queue_attempts)
 
-    for _ in range(3):
-        assert await worker.run_once()
-    before_crash = store.get_workflow(state.task_id)
-    assert before_crash.completed_steps == ["read_alert", "inspect_metrics", "query_logs"]
+    environment = os.environ.copy()
+    environment.update({
+        "AWS_DEFAULT_REGION": aws_settings.aws_region,
+        "LOCALSTACK_ENDPOINT": aws_settings.aws_endpoint_url,
+        "DYNAMODB_TABLE_NAME": aws_settings.dynamodb_table_name,
+        "SQS_QUEUE_URL": aws_settings.sqs_queue_url,
+        "SQS_DLQ_URL": aws_settings.sqs_dlq_url,
+    })
+    helper = Path(__file__).with_name("chaos_worker.py")
+    process = subprocess.Popen([sys.executable, str(helper)], env=environment)
+    try:
+        for _ in range(200):
+            before_crash = store.get_workflow(state.task_id)
+            if (
+                before_crash.completed_steps == ["read_alert", "inspect_metrics", "query_logs"]
+                and before_crash.current_step == "dependency_health"
+            ):
+                break
+            await asyncio.sleep(0.05)
+        else:
+            raise AssertionError("subprocess worker did not reach the step-four chaos window")
+        process.terminate()
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
 
-    abandoned = store.claim("crashed-worker", lease_seconds=1)
-    assert abandoned and abandoned.task_id == state.task_id
-    await asyncio.sleep(1.2)
+    assert any(event.event_type == "CHAOS_PAUSE_STARTED" for event in store.list_events(state.task_id))
+    await asyncio.sleep(2.5)
 
     assert await worker.run_once()
     resumed = store.get_workflow(state.task_id)

@@ -8,11 +8,15 @@ locals {
     { name = "DYNAMODB_TABLE_NAME", value = aws_dynamodb_table.workflows.name },
     { name = "SQS_QUEUE_URL", value = aws_sqs_queue.tasks.url },
     { name = "SQS_DLQ_URL", value = aws_sqs_queue.dead_letter.url },
-    { name = "ECS_CLUSTER", value = var.operations_ecs_cluster_name },
-    { name = "CLOUDWATCH_LOG_GROUP_PREFIX", value = var.operations_log_group_prefix },
+    { name = "ECS_CLUSTER", value = local.operations_cluster },
+    { name = "CLOUDWATCH_LOG_GROUP_PREFIX", value = local.operations_log_prefix },
     { name = "CLOUDWATCH_METRICS_ENABLED", value = "true" },
     { name = "CLOUDWATCH_METRIC_NAMESPACE", value = "AgentResilience" },
     { name = "RUN_WORKER", value = "false" },
+    { name = "MAX_QUEUE_ATTEMPTS", value = tostring(var.max_receive_count) },
+    { name = "CHAOS_PAUSE_TOOL", value = var.chaos_pause_tool },
+    { name = "CHAOS_PAUSE_AFTER_STEPS", value = var.chaos_pause_after_steps > 0 ? tostring(var.chaos_pause_after_steps) : "" },
+    { name = "CHAOS_PAUSE_SECONDS", value = tostring(var.chaos_pause_seconds) },
   ]
   api_secrets = [
     { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.openai.arn },
@@ -139,6 +143,43 @@ resource "aws_ecs_task_definition" "worker" {
   tags = local.tags
 }
 
+resource "aws_ecs_task_definition" "demo" {
+  family                   = "${local.prefix}-checkout-service"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.demo_execution.arn
+  task_role_arn            = aws_iam_role.demo.arn
+
+  container_definitions = jsonencode([{
+    name      = "checkout-service"
+    image     = local.container_image
+    command   = ["agent-resilience-demo"]
+    essential = true
+    environment = [
+      { name = "AWS_REGION", value = var.aws_region },
+      { name = "CLOUDWATCH_METRICS_ENABLED", value = "true" },
+      { name = "SERVICE_METRIC_NAMESPACE", value = "AgentResilience/Services" },
+      { name = "DEMO_SERVICE_NAME", value = "checkout-service" },
+      { name = "DEMO_ENVIRONMENT", value = "production" },
+      { name = "DEMO_FAIL_AFTER_SECONDS", value = tostring(var.demo_fail_after_seconds) },
+      { name = "DEMO_METRIC_INTERVAL_SECONDS", value = "10" },
+      { name = "DEMO_HEALTH_REPORTS_FAILURE", value = "false" },
+      { name = "PORT", value = "8000" },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.demo.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "checkout"
+      }
+    }
+  }])
+  tags = local.tags
+}
+
 resource "aws_ecs_service" "api" {
   name            = "${local.prefix}-api"
   cluster         = aws_ecs_cluster.runtime.id
@@ -151,16 +192,16 @@ resource "aws_ecs_service" "api" {
     rollback = true
   }
   network_configuration {
-    subnets          = var.subnet_ids
+    subnets          = local.task_subnets
     security_groups  = [aws_security_group.tasks.id]
-    assign_public_ip = true
+    assign_public_ip = var.assign_public_ip
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.api.arn
     container_name   = "api"
     container_port   = 8000
   }
-  depends_on = [aws_lb_listener.api, aws_iam_role_policy.api_execution_secrets]
+  depends_on = [aws_lb_listener.api_http, aws_lb_listener.api_https, aws_iam_role_policy.api_execution_secrets]
   tags       = local.tags
 }
 
@@ -176,10 +217,29 @@ resource "aws_ecs_service" "worker" {
     rollback = true
   }
   network_configuration {
-    subnets          = var.subnet_ids
+    subnets          = local.task_subnets
     security_groups  = [aws_security_group.tasks.id]
-    assign_public_ip = true
+    assign_public_ip = var.assign_public_ip
   }
   depends_on = [aws_iam_role_policy.worker_execution_secrets]
   tags       = local.tags
+}
+
+resource "aws_ecs_service" "demo" {
+  name            = "checkout-service"
+  cluster         = aws_ecs_cluster.runtime.id
+  task_definition = aws_ecs_task_definition.demo.arn
+  desired_count   = var.demo_desired_count
+  launch_type     = "FARGATE"
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+  network_configuration {
+    subnets          = local.task_subnets
+    security_groups  = [aws_security_group.tasks.id]
+    assign_public_ip = var.assign_public_ip
+  }
+  tags = local.tags
 }

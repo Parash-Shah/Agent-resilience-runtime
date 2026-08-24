@@ -1,5 +1,10 @@
 locals {
-  prefix = "${var.name}-${var.environment}"
+  prefix                 = "${var.name}-${var.environment}"
+  task_subnets           = length(var.task_subnet_ids) > 0 ? var.task_subnet_ids : var.subnet_ids
+  operations_cluster     = var.operations_ecs_cluster_name != "" ? var.operations_ecs_cluster_name : aws_ecs_cluster.runtime.name
+  operations_log_prefix  = var.operations_log_group_prefix != "" ? var.operations_log_group_prefix : "/ecs/${local.prefix}"
+  allowed_service_arns   = concat(var.operations_service_arns, [aws_ecs_service.demo.id])
+  allowed_log_group_arns = concat(var.operations_log_group_arns, ["${aws_cloudwatch_log_group.demo.arn}:*"])
   tags = {
     Application = var.name
     Environment = var.environment
@@ -55,9 +60,15 @@ resource "aws_dynamodb_table" "workflows" {
 
   global_secondary_index {
     name            = "entity_type-updated_at-index"
-    hash_key        = "entity_type"
-    range_key       = "updated_at"
     projection_type = "ALL"
+    key_schema {
+      attribute_name = "entity_type"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "updated_at"
+      key_type       = "RANGE"
+    }
   }
 
   point_in_time_recovery { enabled = true }
@@ -85,4 +96,14 @@ resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
     QueueName = aws_sqs_queue.dead_letter.name
   }
   tags = local.tags
+}
+
+check "github_oidc_configuration" {
+  assert {
+    condition = (
+      (var.github_repository == "" && var.github_oidc_provider_arn == "") ||
+      (var.github_repository != "" && var.github_oidc_provider_arn != "")
+    )
+    error_message = "github_repository and github_oidc_provider_arn must be set together."
+  }
 }

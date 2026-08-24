@@ -4,6 +4,8 @@
 
 AgentResilience investigates production incidents with an OpenAI Agents SDK orchestrator while keeping execution recoverable, idempotent, observable, and bounded by policy. A model can decide what evidence it needs; it cannot directly use infrastructure credentials or bypass the tool gateway.
 
+**Release status:** the four implementation milestones are complete at v1.0.0. Unit, API, 50-case evaluation, LocalStack, real process-termination chaos, Docker, and Terraform validation run in CI. A real AWS evidence report is intentionally produced only after deploying into an authenticated AWS account; the repository never presents simulated cloud output as a live deployment.
+
 ![Agent interaction architecture](docs/agent-interactions.png)
 
 ## What is implemented
@@ -102,11 +104,11 @@ $env:LOCALSTACK_ENDPOINT = "http://localhost:4566"
 .venv\Scripts\python.exe -m pytest -q -m integration
 ```
 
-The chaos test completes alert, metrics, and log collection, abandons the next SQS delivery as if the worker died, waits for visibility expiry, then proves a replacement worker resumes at dependency health with exactly four completed tools.
+The chaos test starts a separate worker OS process, completes alert, metrics, and log collection, pauses it inside step 4, terminates that process, waits for SQS visibility expiry, and proves a replacement worker resumes at dependency health without repeating the first three tools.
 
-## AWS deployment
+## AWS deployment and final recovery proof
 
-The Terraform module creates the complete runtime but defaults both ECS desired counts to zero so secrets and the container image can be populated safely before tasks start:
+The Terraform module creates the runtime, controlled checkout workload, CloudWatch evidence/alarm path, optional HTTPS/WAF, and an optional branch-restricted GitHub OIDC deploy role. ECS desired counts default to zero so secrets and the first immutable image can be populated before tasks start:
 
 ```powershell
 Copy-Item infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
@@ -123,10 +125,20 @@ terraform -chdir=infra/terraform apply
 
 terraform -chdir=infra/terraform apply `
   -var="container_image=<account>.dkr.ecr.us-east-1.amazonaws.com/agent-resilience-dev:<git-sha>" `
-  -var="api_desired_count=2" -var="worker_desired_count=2"
+  -var="api_desired_count=2" -var="worker_desired_count=1" -var="demo_desired_count=1" `
+  -var="chaos_pause_after_steps=3" -var="chaos_pause_seconds=30"
 ```
 
-Use private task subnets, NAT or VPC endpoints, HTTPS on the ALB, and a restricted `api_ingress_cidrs` value for a production deployment. See [infra/terraform/README.md](infra/terraform/README.md) for the full bootstrap and verification flow.
+Wait for the `checkout-service-elevated-errors` alarm, then run the definitive proof. The verifier reads `ADMIN_API_TOKEN` from the environment or ignored `.env.local`; it never accepts the token as a command-line argument:
+
+```powershell
+.venv\Scripts\python.exe scripts/verify_milestone4.py `
+  --api-url (terraform -chdir=infra/terraform output -raw api_url) `
+  --cluster (terraform -chdir=infra/terraform output -raw ecs_cluster_name) `
+  --worker-service (terraform -chdir=infra/terraform output -raw worker_service_name)
+```
+
+The resulting ignored `evidence/milestone4/latest.json` proves: three steps checkpointed, active worker task terminated, a different ECS task resumed step 4, production remediation paused for approval, restart executed exactly once, recovery verified, and the audit trail completed. Disable the chaos pause after the demonstration. Use private task subnets with NAT, an ACM certificate, WAF, and restricted `api_ingress_cidrs` for an internet-facing deployment. See [the AWS runbook](infra/terraform/README.md).
 
 ## Containers and monitoring
 
@@ -150,7 +162,9 @@ evals/              generated 50-case evaluation suite
 fixtures/           deterministic incident/tool responses
 ops/                Prometheus and Grafana configuration
 infra/terraform/    AWS durable messaging, state, and monitoring primitives
-docs/               system prompt and generated architecture diagrams
+scripts/             secret publishing and deployed recovery verification
+evidence/            ignored live proof output location
+docs/               system prompt, diagrams, and final milestone runbook
 src/, test/         original Java proof of concept retained for history
 ```
 
@@ -158,8 +172,9 @@ src/, test/         original Java proof of concept retained for history
 
 - Never commit `.env` or `.env.local`.
 - Set separate strong `ADMIN_API_TOKEN` and `VIEWER_API_TOKEN` values in any shared environment.
+- Incident creation, reads, event streams, approvals, and DLQ replay require the appropriate bearer role when tokens are configured. `/health` and aggregate Prometheus `/metrics` remain available for infrastructure probes and should be network-restricted in shared environments.
 - Restrict `operations_service_arns` and `operations_log_group_arns` to the exact resources the agent is allowed to touch; never expose AWS credentials to prompts.
-- Terminate TLS and add your organization identity layer in front of the API before production use.
+- Prefer private Fargate subnets, set `assign_public_ip=false`, configure `certificate_arn`, enable WAF, restrict ingress CIDRs, and add your organization identity layer before production use.
 
 ## OpenAI implementation references
 

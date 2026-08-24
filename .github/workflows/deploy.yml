@@ -1,0 +1,119 @@
+name: deploy-aws
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_demo:
+        description: Deploy the controlled checkout service too
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: agent-resilience-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      API_SERVICE: ${{ vars.ECS_API_SERVICE }}
+      API_TASK_FAMILY: ${{ vars.ECS_API_TASK_FAMILY }}
+      WORKER_SERVICE: ${{ vars.ECS_WORKER_SERVICE }}
+      WORKER_TASK_FAMILY: ${{ vars.ECS_WORKER_TASK_FAMILY }}
+      DEMO_SERVICE: ${{ vars.ECS_DEMO_SERVICE }}
+      DEMO_TASK_FAMILY: ${{ vars.ECS_DEMO_TASK_FAMILY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure short-lived AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Authenticate to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push immutable image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPOSITORY:${GITHUB_SHA}"
+          docker build --pull -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Export current task definitions
+        run: |
+          for pair in "api:$API_TASK_FAMILY" "worker:$WORKER_TASK_FAMILY"; do
+            name="${pair%%:*}"
+            family="${pair#*:}"
+            aws ecs describe-task-definition --task-definition "$family" --query taskDefinition \
+              | jq 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)' \
+              > "$name-task.json"
+          done
+          if [[ "${{ inputs.deploy_demo }}" == "true" ]]; then
+            aws ecs describe-task-definition --task-definition "$DEMO_TASK_FAMILY" --query taskDefinition \
+              | jq 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)' \
+              > demo-task.json
+          fi
+
+      - name: Render API task definition
+        id: render-api
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: api-task.json
+          container-name: api
+          image: ${{ env.IMAGE }}
+
+      - name: Deploy API
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-api.outputs.task-definition }}
+          service: ${{ env.API_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Render worker task definition
+        id: render-worker
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: worker-task.json
+          container-name: worker
+          image: ${{ env.IMAGE }}
+
+      - name: Deploy worker
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-worker.outputs.task-definition }}
+          service: ${{ env.WORKER_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Render demo task definition
+        if: ${{ inputs.deploy_demo }}
+        id: render-demo
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: demo-task.json
+          container-name: checkout-service
+          image: ${{ env.IMAGE }}
+
+      - name: Deploy controlled checkout service
+        if: ${{ inputs.deploy_demo }}
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-demo.outputs.task-definition }}
+          service: ${{ env.DEMO_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true

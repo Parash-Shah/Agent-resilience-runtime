@@ -106,6 +106,9 @@ def build_worker(config: Settings = settings) -> DurableWorker:
         build_decision_engine(config),
         ToolGateway(store, build_tool_backend(config)),
         LoopDetector(),
+        config.chaos_pause_tool,
+        config.chaos_pause_after_steps,
+        config.chaos_pause_seconds,
     )
     return DurableWorker(store, runtime, config)
 

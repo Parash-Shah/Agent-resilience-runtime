@@ -2,12 +2,34 @@ aws_region = "us-east-1"
 environment = "dev"
 vpc_id = "vpc-00000000000000000"
 subnet_ids = ["subnet-00000000000000001", "subnet-00000000000000002"]
+# For hardened deployments use private subnets with NAT for OpenAI API access:
+# task_subnet_ids = ["subnet-00000000000000003", "subnet-00000000000000004"]
+# assign_public_ip = false
 
-# Restrict these to the exact production service and log groups the agent may operate on.
-operations_ecs_cluster_name = "production-cluster"
-operations_service_arns = [
-  "arn:aws:ecs:us-east-1:123456789012:service/production-cluster/checkout-service"
-]
-operations_log_group_arns = [
-  "arn:aws:logs:us-east-1:123456789012:log-group:/ecs/checkout-service:*"
-]
+api_ingress_cidrs = ["203.0.113.10/32"]
+# certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+enable_waf = true
+
+# Start these only after publishing Secrets Manager values and an immutable image.
+api_desired_count    = 2
+worker_desired_count = 1
+demo_desired_count   = 1
+
+# Enable only for the worker-termination recovery proof, then return both to defaults.
+chaos_pause_after_steps = 3
+chaos_pause_seconds     = 30
+
+# Optional branch-restricted GitHub Actions image deployment role.
+github_repository        = "Parash-Shah/Agent-resilience-runtime"
+github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+
+# Leave the following empty to operate only on the controlled checkout demo.
+# For external targets, restrict these to exact service and log-group ARNs.
+# operations_ecs_cluster_name = "production-cluster"
+# operations_service_arns = [
+#   "arn:aws:ecs:us-east-1:123456789012:service/production-cluster/checkout-service"
+# ]
+# operations_log_group_arns = [
+#   "arn:aws:logs:us-east-1:123456789012:log-group:/ecs/checkout-service:*"
+# ]
+# operations_log_group_prefix = "/ecs"
