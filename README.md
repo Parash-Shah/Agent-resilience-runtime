@@ -165,7 +165,6 @@ infra/terraform/    AWS durable messaging, state, and monitoring primitives
 scripts/             secret publishing and deployed recovery verification
 evidence/            ignored live proof output location
 docs/               system prompt, diagrams, and final milestone runbook
-src/, test/         original Java proof of concept retained for history
 ```
 
 ## Security notes
